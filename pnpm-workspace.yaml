@@ -1,0 +1,5 @@
+nodeLinker: hoisted
+allowBuilds:
+  onnxruntime-node: true
+  sharp: true
+  protobufjs: false

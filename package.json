@@ -1,0 +1,19 @@
+{
+  "name": "indesignal-audio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {"node": ">=24"},
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {"start": "node run.mjs", "test": "node --test test.mjs"},
+  "dependencies": {
+    "@huggingface/transformers": "3.5.1",
+    "kokoro-js": "1.2.1",
+    "phonemizer": "1.2.1"
+  },
+  "overrides": {
+    "@huggingface/transformers": "3.5.1",
+    "phonemizer": "1.2.1"
+  }
+}

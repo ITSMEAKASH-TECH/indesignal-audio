@@ -1,0 +1,7 @@
+node_modules/
+model-cache/
+.tmp/
+.env*
+!.env.example
+*.mp3
+*.wav
