@@ -9,7 +9,7 @@ const job=(id,text='A new AI update. The facts are reviewed.')=>({id,text,hash:h
 const mp3=new Uint8Array(256);mp3.set([255,251,144,100]);
 const secret='private-site-service-token-never-print';
 const requestSecret='private-github-request-token-never-print';
-const env={SITES_SERVICE_TOKEN:secret,ACTIONS_ID_TOKEN_REQUEST_URL:'https://pipelines.actions.githubusercontent.com/idtoken?api-version=1',ACTIONS_ID_TOKEN_REQUEST_TOKEN:requestSecret};
+const env={ACTIONS_ID_TOKEN_REQUEST_URL:'https://pipelines.actions.githubusercontent.com/idtoken?api-version=1',ACTIONS_ID_TOKEN_REQUEST_TOKEN:requestSecret};
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
 function fakeApi({lists=[[job('article'),job('brief')]],uploadStatus=200,readback=mp3,failFirstGet=false}={}){
   const calls=[],tokens=[];let listIndex=0,failedGet=false;
@@ -20,7 +20,7 @@ function fakeApi({lists=[[job('article'),job('brief')]],uploadStatus=200,readbac
       const value='header'+(tokens.length+1)+'.payload.signature';tokens.push(value);return json({value});
     }
     assert.equal(new URL(url).origin,ORIGIN);assert.equal(options.redirect,'error');
-    assert.equal(headers.get('OAI-Sites-Authorization'),'Bearer '+secret);
+    assert.equal(headers.get('OAI-Sites-Authorization'),null,'public portal needs no permanent service credential');assert.equal(headers.get('User-Agent'),'Indesignal-Audio-Publisher/1.0');
     if(url.endsWith('/api/editorial/narration/jobs')){
       assert.equal(headers.get('Authorization'),'Bearer '+tokens.at(-1));
       if(failFirstGet&&!failedGet){failedGet=true;return json({},503);}
@@ -66,7 +66,7 @@ const mismatched=fakeApi({readback:new Uint8Array(256)});await assert.rejects(cr
 const denied=fakeApi({uploadStatus:403});await assert.rejects(createClient({env,fetchImpl:denied.fetchImpl}).upload(job('brief'),mp3),/NARRATION_AUTH_DENIED/);
 await assert.rejects(client.upload(job('brief'),new Uint8Array(256)),/INVALID_GENERATED_MP3/);
 const retryApi=fakeApi({failFirstGet:true});assert.equal((await createClient({env,fetchImpl:retryApi.fetchImpl,sleep:async()=>{}}).jobs()).length,2);
-assert.throws(()=>createClient({env:{...env,SITES_SERVICE_TOKEN:''}}),/MISSING_SITE_SERVICE_TOKEN/);
+assert.doesNotThrow(()=>createClient({env}),'GitHub OIDC is the only credential needed');
 await assert.rejects(createClient({env:{...env,ACTIONS_ID_TOKEN_REQUEST_URL:'https://attacker.example/token'},fetchImpl:api.fetchImpl}).jobs(),/INVALID_GITHUB_OIDC_URL/);
 const safeEvents=[];await run({client:{jobs:async()=>[job('brief')],upload:async()=>{throw Error(secret);}},synthesize:async()=>mp3,log:event=>safeEvents.push(event)});assert.doesNotMatch(JSON.stringify(safeEvents),/private-site-service/);
 

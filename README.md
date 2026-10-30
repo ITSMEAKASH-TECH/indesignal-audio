@@ -14,9 +14,7 @@ Node.js 24, pinned Kokoro-JS 1.2.1, Transformers 3.5.1, Kokoro q8 CPU and `af_he
 
 ## Authorization
 
-The one repository secret is `SITES_SERVICE_TOKEN`, the existing Sites service-access token for this portal. Keep it in **Settings → Secrets and variables → Actions**, never source code. It permits the job to reach Sites dispatch; it does not grant editorial identity or permission to change the news.
-
-For audio writes the job requests a short-lived GitHub OIDC token with audience `https://indesignal.vividtoad4096.chatgpt.site/api/editorial/narration`. The portal validates GitHub's signature, immutable repository ID, owner, `main` branch, workflow path and permitted trigger. There is no permanent audio-upload password in this repository. Pull requests and forks cannot upload narration. If the repository is renamed or replaced, update the portal's explicit allowlist before expecting writes to succeed.
+No repository secrets are needed. The public portal accepts authenticated narration requests directly; each job receives a short-lived GitHub identity token. For audio writes the job requests a short-lived GitHub OIDC token with audience `https://indesignal.vividtoad4096.chatgpt.site/api/editorial/narration`. The portal validates GitHub's signature, immutable repository ID, owner, `main` branch, workflow path and permitted trigger. There is no permanent audio-upload password in this repository. Pull requests and forks cannot upload narration. If the repository is renamed or replaced, update the portal's explicit allowlist before expecting writes to succeed.
 
 The exact current canonical narration comes from the portal. This code never constructs a separate news script. It checks the text hash before synthesis, uploads using that hash, and verifies both response metadata and complete downloaded bytes. Tokens and scripts are not printed in job logs. Model/voice software and their licenses remain with their respective authors; Kokoro weights are Apache-2.0 licensed.
 
@@ -28,4 +26,4 @@ Sources: [GitHub Actions billing](https://docs.github.com/en/billing/concepts/pr
 
 ## Local checks
 
-Run `node --test test.mjs` without downloading any model. To run the actual publisher, install dependencies with `pnpm install --frozen-lockfile` and start it in GitHub Actions, where GitHub issues the required OIDC token. Normal developer shells do not have upload authority.
+Run `node --test test.mjs` without downloading any model. To run the actual publisher, install dependencies with `pnpm install --frozen-lockfile` and start it in GitHub Actions, where GitHub issues the required OIDC token. Normal developer shells do not have upload authority. No long-lived Site or narration credential is stored in GitHub.
