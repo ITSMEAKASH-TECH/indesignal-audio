@@ -37,6 +37,16 @@ function validMp3(bytes){
   return frame+4<=bytes.length&&bytes[frame]===255&&(bytes[frame+1]&224)===224&&(bytes[frame+1]&24)!==8&&(bytes[frame+1]&6)!==0&&(bytes[frame+2]&240)!==0&&(bytes[frame+2]&240)!==240&&(bytes[frame+2]&12)!==12;
 }
 export function createClient({env=process.env,fetchImpl=fetch,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+  let identityCheck='unreadable';
+  function checkIdentity(token){
+    try{
+      const [rawHeader,rawClaims]=token.split('.'),header=JSON.parse(Buffer.from(rawHeader,'base64url')),c=JSON.parse(Buffer.from(rawClaims,'base64url'));
+      const now=Math.floor(Date.now()/1000),repo='ITSMEAKASH-TECH/indesignal-audio';
+      const checks={algorithm:header.alg==='RS256',type:header.typ==='JWT',issuer:c.iss==='https://token.actions.githubusercontent.com',audience:c.aud===AUDIENCE,repository:c.repository===repo,repository_id:c.repository_id==='1439301460',owner_id:c.repository_owner_id==='349210432',ref:c.ref==='refs/heads/main',ref_type:c.ref_type==='branch',workflow:c.workflow_ref===repo+'/.github/workflows/narration.yml@refs/heads/main',event:['push','schedule','workflow_dispatch'].includes(c.event_name),subject:[`repo:${repo}:ref:refs/heads/main`,'repo:ITSMEAKASH-TECH@349210432/indesignal-audio@1439301460:ref:refs/heads/main'].includes(c.sub),time:Number.isInteger(c.iat)&&Number.isInteger(c.exp)&&c.exp>now&&c.iat<=now+30&&c.iat>=now-600&&c.exp-c.iat<=600};
+      identityCheck=Object.entries(checks).filter(([,ok])=>!ok).map(([key])=>key).join('_')||'claims_match';
+    }catch{identityCheck='unreadable';}
+  }
+
   async function request(url,options={},retry=true){
     if(!String(url).startsWith(ORIGIN+'/'))throw new JobError('UNSUPPORTED_SITE_ORIGIN',true);
     for(let attempt=0;attempt<(retry?3:1);attempt++){
@@ -56,12 +66,12 @@ export function createClient({env=process.env,fetchImpl=fetch,sleep=ms=>new Prom
     if(!response.ok)throw new JobError('GITHUB_OIDC_DENIED',true);
     const data=await readJson(response,16000);
     if(typeof data.value!=='string'||data.value.length>14000||data.value.split('.').length!==3||/[\r\n\0]/.test(data.value))throw new JobError('INVALID_GITHUB_OIDC_TOKEN',true);
-    return data.value;
+    checkIdentity(data.value);return data.value;
   }
   const headers=async()=>({Authorization:'Bearer '+await oidc(),'User-Agent':'Indesignal-Audio-Publisher/1.0'});
   async function jobs(){
     const response=await request(ORIGIN+'/api/editorial/narration/jobs',{headers:await headers()});
-    if(!response.ok)throw new JobError(response.status===401||response.status===403?'NARRATION_AUTH_DENIED':'JOBS_UNAVAILABLE',response.status===401||response.status===403);
+    if(!response.ok)throw new JobError(response.status===401||response.status===403?'NARRATION_AUTH_DENIED_HTTP_'+response.status+'_'+identityCheck:'JOBS_UNAVAILABLE',response.status===401||response.status===403);
     return validateJobs(await readJson(response));
   }
   async function upload(job,audio){
