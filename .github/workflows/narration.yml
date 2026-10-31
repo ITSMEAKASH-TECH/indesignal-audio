@@ -5,8 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # 08:25 and 09:25 Asia/Kolkata, after the 08:00 editorial update.
-    - cron: '55 2,3 * * *'
+    # Hourly at :07 Asia/Kolkata, including 08:07 after the editorial update.
+    - cron: '37 * * * *'
+    # An extra 08:22 Asia/Kolkata check covers a longer morning refresh.
+    - cron: '52 2 * * *'
 
 permissions:
   contents: read
@@ -31,22 +33,30 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Check generator behavior
+        run: node --test test.mjs
+      - name: Check for missing current audio
+        id: pending
+        run: node run.mjs --check
       - name: Install pinned package manager
+        if: steps.pending.outputs.has_jobs == 'true'
         run: npm install --global pnpm@11.25.0
       - name: Restore public model files
+        if: steps.pending.outputs.has_jobs == 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: model-cache
           key: kokoro-q8-1.2.1-transformers-3.5.1-af-heart-linux-v1
       - name: Install dependencies
+        if: steps.pending.outputs.has_jobs == 'true'
         run: pnpm install --frozen-lockfile
       - name: Check audio encoder
+        if: steps.pending.outputs.has_jobs == 'true'
         run: |
           if ! command -v ffmpeg >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends ffmpeg
           fi
-      - name: Check generator behavior
-        run: node --test test.mjs
       - name: Generate and publish missing audio
+        if: steps.pending.outputs.has_jobs == 'true'
         run: node run.mjs
