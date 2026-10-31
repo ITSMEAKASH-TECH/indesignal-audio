@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {createClient,run,validateJobs,ORIGIN,AUDIENCE} from './run.mjs';
+import {createClient,checkPending,run,validateJobs,ORIGIN,AUDIENCE} from './run.mjs';
 import {chunksFor} from './engine.mjs';
 
 const hash=text=>createHash('sha256').update(text).digest('hex');
@@ -55,6 +55,25 @@ assert.doesNotMatch(JSON.stringify(events),/private-|header\d|The facts|reviewed
 let synthCalls=0;
 const quietApi=fakeApi({lists:[[]]});await run({client:createClient({env,fetchImpl:quietApi.fetchImpl}),synthesize:async()=>{synthCalls++;return mp3;},log:()=>{}});assert.equal(synthCalls,0,'no jobs means no model load or synthesis');
 
+// The preflight uses real client authentication/validation, but cannot synthesize
+// or upload. An empty queue produces a fixed false output and no heavy requests.
+for(const jobs of [[],[job('brief')]]){
+  const checkApi=fakeApi({lists:[jobs]}),outputs=[],checkEvents=[];
+  const checked=await checkPending({client:createClient({env,fetchImpl:checkApi.fetchImpl}),outputPath:'workflow-output',writeOutput:async(...args)=>outputs.push(args),log:e=>checkEvents.push(e)});
+  assert.deepEqual(checked,{hasJobs:jobs.length>0,count:jobs.length});
+  assert.deepEqual(outputs,[['workflow-output','has_jobs='+String(jobs.length>0)+'\n','utf8']]);
+  assert.equal(checkApi.calls.length,2,'only identity and pending jobs are requested');
+  assert.equal(checkApi.calls.filter(c=>c.options.method==='POST'||c.url.includes('.mp3')).length,0);
+  assert.doesNotMatch(JSON.stringify({outputs,checkEvents}),/private-|header\d|The facts|reviewed/);
+}
+let wroteInvalid=false;
+await assert.rejects(checkPending({client:{jobs:async()=>[{...job('brief'),hash:'0'.repeat(64)}]},outputPath:'workflow-output',writeOutput:async()=>{wroteInvalid=true;},log:()=>{}}),/INVALID_JOB/);
+assert.equal(wroteInvalid,false,'invalid jobs never enable installation');
+const deniedCheck=createClient({env,fetchImpl:async(url,options)=>String(url).startsWith('https://pipelines.')?json({value:'header.payload.signature'}):json({},401)});
+await assert.rejects(checkPending({client:deniedCheck,outputPath:'workflow-output',writeOutput:async()=>{wroteInvalid=true;},log:()=>{}}),/NARRATION_AUTH_DENIED/);
+assert.equal(wroteInvalid,false,'failed authentication never enables installation');
+await assert.rejects(checkPending({client:{jobs:async()=>[]},outputPath:undefined,log:()=>{}}),/MISSING_WORKFLOW_OUTPUT/);
+
 const old=job('brief','The earlier version.'),fresh=job('brief','The revised version.');let first=true,rechecks=0;
 const staleClient={jobs:async()=>{rechecks++;return rechecks===1?[old]:[fresh];},upload:async()=>{if(first){first=false;return 'stale';}return 'ready';}};
 const staleEvents=[];const staleResult=await run({client:staleClient,synthesize:async()=>mp3,log:event=>staleEvents.push(event)});
@@ -73,4 +92,10 @@ const safeEvents=[];await run({client:{jobs:async()=>[job('brief')],upload:async
 const workflow=await readFile(new URL('./.github/workflows/narration.yml',import.meta.url),'utf8');
 assert.match(workflow,/id-token: write/);assert.match(workflow,/contents: read/);assert.doesNotMatch(workflow,/pull_request|upload-artifact/);assert.match(workflow,/cancel-in-progress: false/);assert.match(workflow,/timeout-minutes: 120/);
 assert.equal((workflow.match(/uses: actions\/[^@]+@[a-f0-9]{40}/g)||[]).length,3);
+assert.match(workflow,/cron: '37 \* \* \* \*'/);assert.match(workflow,/cron: '52 2 \* \* \*'/);
+assert.ok(workflow.indexOf('run: node run.mjs --check')<workflow.indexOf('name: Install pinned package manager'));
+for(const name of ['Install pinned package manager','Restore public model files','Install dependencies','Check audio encoder','Generate and publish missing audio']){
+  const section=workflow.slice(workflow.indexOf('- name: '+name)).split(/\n      - name:/)[0];
+  assert.match(section,/if: steps\.pending\.outputs\.has_jobs == 'true'/,name+' skips when no audio is missing');
+}
 console.log('PASS: canonical jobs, brief-first publication, fresh OIDC uploads, exact byte readback, stale-text reread, bounded retries, secret-safe logs and restricted pinned workflow.');

@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {appendFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -91,6 +92,14 @@ export function createClient({env=process.env,fetchImpl=fetch,sleep=ms=>new Prom
   }
   return {jobs,upload};
 }
+export async function checkPending({client=createClient(),outputPath=process.env.GITHUB_OUTPUT,writeOutput=appendFile,log=event=>process.stdout.write(JSON.stringify(event)+'\n')}={}){
+  // Authenticate and validate before telling the workflow to install the voice
+  // engine. Only this fixed boolean is written; no script or token reaches output.
+  const jobs=validateJobs({jobs:await client.jobs()}),hasJobs=jobs.length>0;
+  if(typeof outputPath!=='string'||!outputPath||/[\r\n\0]/.test(outputPath))throw new JobError('MISSING_WORKFLOW_OUTPUT',true);
+  try{await writeOutput(outputPath,'has_jobs='+String(hasJobs)+'\n','utf8');}catch{throw new JobError('WORKFLOW_OUTPUT_FAILED',true);}
+  log({event:'checked',pending:jobs.length});return {hasJobs,count:jobs.length};
+}
 export async function run({client,synthesize,log=event=>process.stdout.write(JSON.stringify(event)+'\n')}={}){
   if(!client)client=createClient();
   let queue=await client.jobs(),uploaded=0,stale=0,failed=0,rechecked=false;
@@ -111,5 +120,7 @@ export async function run({client,synthesize,log=event=>process.stdout.write(JSO
   const result={event:'complete',uploaded,stale,failed};log(result);return result;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  run().then(result=>{if(result.failed)process.exitCode=1;}).catch(error=>{process.stderr.write(JSON.stringify({event:'failed',code:error instanceof JobError?error.code:'AUDIO_JOB_FAILED'})+'\n');process.exitCode=1;});
+  const args=process.argv.slice(2);
+  const start=args.length===0?run:args.length===1&&args[0]==='--check'?checkPending:async()=>{throw new JobError('INVALID_ARGUMENTS',true);};
+  start().then(result=>{if(result.failed)process.exitCode=1;}).catch(error=>{process.stderr.write(JSON.stringify({event:'failed',code:error instanceof JobError?error.code:'AUDIO_JOB_FAILED'})+'\n');process.exitCode=1;});
 }

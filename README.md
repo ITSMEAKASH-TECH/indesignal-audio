@@ -6,7 +6,9 @@ This repository contains only the generator and its workflow. It does not contai
 
 ## Daily operation
 
-The standard GitHub-hosted Ubuntu job runs after the portal's daily editorial update, at 08:25 and 09:25 Asia/Kolkata. It can also be started from Actions → Publish Indesignal audio → Run workflow. Pushes to `main` run it as well. Runs are serialized, with a 120-minute ceiling. GitHub schedules are best effort: they can be delayed or dropped, and public-repository schedules stop after 60 days without repository activity. Check Actions failures and re-enable a disabled schedule when needed.
+The standard GitHub-hosted Ubuntu job checks hourly at :07 Asia/Kolkata, including 08:07 after the portal's 08:00 editorial update. An extra morning check runs at 08:22. This catches later editorial updates as well as the morning refresh. It can also be started from Actions → Publish Indesignal audio → Run workflow. Pushes to `main` run it as well. Runs are serialized, with a 120-minute ceiling. These are scheduled check times, not guarantees of immediate audio availability: GitHub schedules are best effort and can be delayed or dropped. Public-repository schedules stop after 60 days without repository activity. Check Actions failures and re-enable a disabled schedule when needed.
+
+Every run first authenticates to the portal and validates its pending queue using `node run.mjs --check`. If no audio is missing, the run finishes without installing voice dependencies, restoring model files, installing FFmpeg or loading the voice engine. The preflight writes only a fixed `has_jobs=true` or `has_jobs=false` workflow output. Narration and tokens never enter workflow output or logs.
 
 The job asks the portal for missing current audio, prepares the daily brief first, and uploads each completed file immediately. Stories that already have matching audio are skipped. Revised text creates a new content hash and fresh narration; an obsolete upload is rejected and the job checks the queue once again. The first backfill of older articles takes longer; subsequent runs only synthesize missing or changed scripts.
 
