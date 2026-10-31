@@ -72,7 +72,7 @@ assert.equal(wroteInvalid,false,'invalid jobs never enable installation');
 const deniedCheck=createClient({env,fetchImpl:async(url,options)=>String(url).startsWith('https://pipelines.')?json({value:'header.payload.signature'}):json({},401)});
 await assert.rejects(checkPending({client:deniedCheck,outputPath:'workflow-output',writeOutput:async()=>{wroteInvalid=true;},log:()=>{}}),/NARRATION_AUTH_DENIED/);
 assert.equal(wroteInvalid,false,'failed authentication never enables installation');
-await assert.rejects(checkPending({client:{jobs:async()=>[]},outputPath:undefined,log:()=>{}}),/MISSING_WORKFLOW_OUTPUT/);
+await assert.rejects(checkPending({client:{jobs:async()=>[]},outputPath:'',log:()=>{}}),/MISSING_WORKFLOW_OUTPUT/);
 
 const old=job('brief','The earlier version.'),fresh=job('brief','The revised version.');let first=true,rechecks=0;
 const staleClient={jobs:async()=>{rechecks++;return rechecks===1?[old]:[fresh];},upload:async()=>{if(first){first=false;return 'stale';}return 'ready';}};
