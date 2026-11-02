@@ -11,15 +11,16 @@ const secret='private-site-service-token-never-print';
 const requestSecret='private-github-request-token-never-print';
 const env={ACTIONS_ID_TOKEN_REQUEST_URL:'https://pipelines.actions.githubusercontent.com/idtoken?api-version=1',ACTIONS_ID_TOKEN_REQUEST_TOKEN:requestSecret};
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
-function fakeApi({lists=[[job('article'),job('brief')]],uploadStatus=200,readback=mp3,failFirstGet=false}={}){
+function fakeApi({lists=[[job('article'),job('brief')]],uploadStatus=200,readback=mp3,failFirstGet=false,portalOrigin=ORIGIN}={}){
   const calls=[],tokens=[];let listIndex=0,failedGet=false;
   const fetchImpl=async(url,options={})=>{
     url=String(url);const headers=new Headers(options.headers);calls.push({url,options,headers});
     if(url.startsWith('https://pipelines.actions.githubusercontent.com/')){
+      assert.equal(options.redirect,'error','GitHub identity requests must not follow redirects');
       assert.equal(headers.get('authorization'),'Bearer '+requestSecret);assert.equal(new URL(url).searchParams.get('audience'),AUDIENCE);
       const value='header'+(tokens.length+1)+'.payload.signature';tokens.push(value);return json({value});
     }
-    assert.equal(new URL(url).origin,ORIGIN);assert.equal(options.redirect,'error');
+    assert.equal(new URL(url).origin,portalOrigin);assert.equal(options.redirect,'manual');
     assert.equal(headers.get('OAI-Sites-Authorization'),null,'public portal needs no permanent service credential');assert.equal(headers.get('User-Agent'),'Indesignal-Audio-Publisher/1.0');
     if(url.endsWith('/api/editorial/narration/jobs')){
       assert.equal(headers.get('Authorization'),'Bearer '+tokens.at(-1));
@@ -85,6 +86,93 @@ const mismatched=fakeApi({readback:new Uint8Array(256)});await assert.rejects(cr
 const denied=fakeApi({uploadStatus:403});await assert.rejects(createClient({env,fetchImpl:denied.fetchImpl}).upload(job('brief'),mp3),/NARRATION_AUTH_DENIED/);
 await assert.rejects(client.upload(job('brief'),new Uint8Array(256)),/INVALID_GENERATED_MP3/);
 const retryApi=fakeApi({failFirstGet:true});assert.equal((await createClient({env,fetchImpl:retryApi.fetchImpl,sleep:async()=>{}}).jobs()).length,2);
+
+// Deployments can redirect the original public alias to this explicitly pinned
+// canonical route. Exercise every real audio operation through that route.
+const routedOrigin='https://indesignal.pewerboy7.chatgpt.site';
+function routedApi({api=fakeApi({portalOrigin:routedOrigin,lists:[[job('brief')]]}),failPostOnce=false,failNetworkOnce=false}={}){
+  const calls=[];let failedPost=false,failedNetwork=false;
+  const fetchImpl=async(url,options={})=>{
+    const u=new URL(url);calls.push({url:String(url),options,headers:new Headers(options.headers)});
+    if(u.origin===ORIGIN)return new Response(null,{status:options.method==='POST'?308:307,headers:{Location:routedOrigin+u.pathname+u.search}});
+    if(u.origin===routedOrigin&&failNetworkOnce&&!failedNetwork){failedNetwork=true;throw Error('temporary network failure');}
+    if(u.origin===routedOrigin&&options.method==='POST'&&failPostOnce&&!failedPost){failedPost=true;return json({},503);}
+    return api.fetchImpl(url,options);
+  };
+  return {fetchImpl,calls,api};
+}
+const routed=routedApi(),routedClient=createClient({env,fetchImpl:routed.fetchImpl,sleep:async()=>{}}),uploadBytes=Buffer.from(mp3);
+assert.equal((await routedClient.jobs())[0].id,'brief');
+assert.equal(await routedClient.upload(job('brief'),uploadBytes),'ready');
+const routedCalls=routed.calls.filter(c=>!c.url.startsWith('https://pipelines.'));
+assert.equal(routedCalls.length,8,'jobs, upload, HEAD and byte readback each use one validated redirect');
+for(const [i,method] of ['GET','POST','HEAD','GET'].entries()){
+  const initial=routedCalls[i*2],destination=routedCalls[i*2+1];
+  assert.equal(new URL(initial.url).origin,ORIGIN);assert.equal(new URL(destination.url).origin,routedOrigin);
+  assert.equal(new URL(initial.url).pathname+new URL(initial.url).search,new URL(destination.url).pathname+new URL(destination.url).search);
+  assert.equal(initial.options.method||'GET',method);assert.equal(destination.options.method||'GET',method);
+  assert.equal(initial.options.redirect,'manual');assert.equal(destination.options.redirect,'manual');
+  assert.equal(initial.headers.get('Authorization'),destination.headers.get('Authorization'));
+  assert.equal(initial.options.body,destination.options.body);
+}
+assert.ok(routedCalls.filter(c=>c.options.method==='POST').every(c=>c.options.body===uploadBytes),'the identical replayable MP3 buffer is forwarded unchanged');
+assert.ok(routedCalls.filter(c=>c.url.includes('.mp3')).every(c=>c.headers.get('Authorization')===null),'public verification never receives the upload token');
+assert.equal(AUDIENCE,ORIGIN+'/api/editorial/narration','canonical transport does not change the stable OIDC audience');
+
+for(const mode of ['http','network']){
+  const retryRoute=routedApi({api:fakeApi({portalOrigin:routedOrigin,failFirstGet:mode==='http'}),failNetworkOnce:mode==='network'}),sleeps=[];
+  assert.equal((await createClient({env,fetchImpl:retryRoute.fetchImpl,sleep:async ms=>sleeps.push(ms)}).jobs()).length,2);
+  assert.deepEqual(sleeps,[1000]);
+  assert.equal(retryRoute.calls.filter(c=>!c.url.startsWith('https://pipelines.')).length,4,'a transient failure retries the full validated route');
+}
+const postRetry=routedApi({failPostOnce:true}),postSleeps=[];
+assert.equal(await createClient({env,fetchImpl:postRetry.fetchImpl,sleep:async ms=>postSleeps.push(ms)}).upload(job('brief'),uploadBytes),'ready');
+assert.deepEqual(postSleeps,[1000]);
+assert.equal(postRetry.calls.filter(c=>c.options.method==='POST').length,4);
+assert.ok(postRetry.calls.filter(c=>c.options.method==='POST').every(c=>c.options.body===uploadBytes),'retries also retain exact MP3 bytes');
+
+const jobsPath='/api/editorial/narration/jobs';
+for(const [status,location] of [
+  [301,routedOrigin+jobsPath],[302,routedOrigin+jobsPath],[303,routedOrigin+jobsPath],
+  [307,'https://attacker.example'+jobsPath],[307,'https://indesignal.other.chatgpt.site'+jobsPath],
+  [307,routedOrigin+'/login'],[307,routedOrigin+jobsPath+'/extra'],[307,routedOrigin+jobsPath+'?changed=1'],
+  [307,routedOrigin+jobsPath+'#fragment'],[307,routedOrigin.replace('https:','http:')+jobsPath],
+  [307,routedOrigin.replace('https://','https://user:password@')+jobsPath],
+  [307,routedOrigin+':8443'+jobsPath],[307,'http://[invalid'],[307,undefined]
+]){
+  const siteCalls=[];
+  const unsafeClient=createClient({env,sleep:async()=>{throw Error('unsafe redirects must not retry');},fetchImpl:async(url,options)=>{
+    if(String(url).startsWith('https://pipelines.')){assert.equal(options.redirect,'error');return json({value:'header.payload.signature'});}
+    siteCalls.push({url:String(url),options});return new Response(null,{status,headers:location===undefined?{}:{Location:location}});
+  }});
+  await assert.rejects(unsafeClient.jobs(),error=>error.code==='SITE_REDIRECT_DENIED'&&error.fatal===true);
+  assert.equal(siteCalls.length,1,'invalid destinations never receive a second request or bearer token');
+  assert.equal(new URL(siteCalls[0].url).origin,ORIGIN);
+}
+const loopCalls=[];
+const loopClient=createClient({env,sleep:async()=>{throw Error('redirect loops must not retry');},fetchImpl:async(url,options)=>{
+  if(String(url).startsWith('https://pipelines.'))return json({value:'header.payload.signature'});
+  const u=new URL(url);loopCalls.push(String(url));return new Response(null,{status:307,headers:{Location:(u.origin===ORIGIN?routedOrigin:ORIGIN)+u.pathname+u.search}});
+}});
+await assert.rejects(loopClient.jobs(),error=>error.code==='SITE_REDIRECT_LOOP'&&error.fatal===true);
+assert.equal(loopCalls.length,2,'a cycle stops at the second pinned origin without retrying or exceeding the hop bound');
+
+const changedHashApi=fakeApi({portalOrigin:routedOrigin}),changedHashCalls=[];
+await assert.rejects(createClient({env,fetchImpl:async(url,options)=>{
+  const u=new URL(url);changedHashCalls.push({url:String(url),options});
+  if(u.origin===ORIGIN)return new Response(null,{status:307,headers:{Location:routedOrigin+u.pathname+(u.pathname.endsWith('.mp3')?'?v='+'0'.repeat(64):u.search)}});
+  return changedHashApi.fetchImpl(url,options);
+}}).upload(job('brief'),uploadBytes),error=>error.code==='SITE_REDIRECT_DENIED'&&error.fatal===true);
+assert.equal(changedHashCalls.filter(c=>new URL(c.url).origin===routedOrigin&&c.options.method==='HEAD').length,0,'an altered MP3 version hash is rejected before the destination request');
+const offlineCalls=[],offlineSleeps=[];
+await assert.rejects(createClient({env,sleep:async ms=>offlineSleeps.push(ms),fetchImpl:async(url,options)=>{
+  if(String(url).startsWith('https://pipelines.'))return json({value:'header.payload.signature'});
+  const u=new URL(url);offlineCalls.push(String(url));
+  if(u.origin===ORIGIN)return new Response(null,{status:307,headers:{Location:routedOrigin+u.pathname+u.search}});
+  throw Error('offline');
+}}).jobs(),/SITE_CONNECTION_FAILED/);
+assert.equal(offlineCalls.length,6,'each of at most three attempts follows only one validated alias hop');assert.deepEqual(offlineSleeps,[1000,2000]);
+
 assert.doesNotThrow(()=>createClient({env}),'GitHub OIDC is the only credential needed');
 await assert.rejects(createClient({env:{...env,ACTIONS_ID_TOKEN_REQUEST_URL:'https://attacker.example/token'},fetchImpl:api.fetchImpl}).jobs(),/INVALID_GITHUB_OIDC_URL/);
 const safeEvents=[];await run({client:{jobs:async()=>[job('brief')],upload:async()=>{throw Error(secret);}},synthesize:async()=>mp3,log:event=>safeEvents.push(event)});assert.doesNotMatch(JSON.stringify(safeEvents),/private-site-service/);
@@ -98,4 +186,4 @@ for(const name of ['Install pinned package manager','Restore public model files'
   const section=workflow.slice(workflow.indexOf('- name: '+name)).split(/\n      - name:/)[0];
   assert.match(section,/if: steps\.pending\.outputs\.has_jobs == 'true'/,name+' skips when no audio is missing');
 }
-console.log('PASS: canonical jobs, brief-first publication, fresh OIDC uploads, exact byte readback, stale-text reread, bounded retries, secret-safe logs and restricted pinned workflow.');
+console.log('PASS: canonical jobs, brief-first publication, fresh OIDC uploads, pinned same-path 307/308 transport, rejected redirects without token leakage, loop bounds, exact byte/body readback and replay, stale-text reread, bounded retries, secret-safe logs and restricted pinned workflow.');
