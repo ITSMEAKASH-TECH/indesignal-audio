@@ -5,6 +5,10 @@ import {fileURLToPath} from 'node:url';
 
 export const ORIGIN='https://indesignal.vividtoad4096.chatgpt.site';
 export const AUDIENCE=ORIGIN+'/api/editorial/narration';
+// These two origins are confirmed routes for this same portal. Never forward
+// narration authority to an arbitrary chatgpt.site host or changed API path.
+const TRANSPORT_ORIGINS=new Set([ORIGIN,'https://indesignal.pewerboy7.chatgpt.site']);
+const MAX_SITE_REDIRECTS=2;
 const MAX_AUDIO=5*1024*1024;
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const canonical=text=>String(text).replace(/\s+/gu,' ').trim();
@@ -48,11 +52,30 @@ export function createClient({env=process.env,fetchImpl=fetch,sleep=ms=>new Prom
     }catch{identityCheck='unreadable';}
   }
 
+  async function followSiteRequest(original,options){
+    let current=original;
+    const seen=new Set([current.href]);
+    for(let hops=0;;hops++){
+      const response=await fetchImpl(current.href,{...options,redirect:'manual',signal:AbortSignal.timeout(30000)});
+      if(response.status<300||response.status>=400)return response;
+      const location=response.headers.get('location');
+      try{await response.body?.cancel();}catch{}
+      let next;
+      try{if(location)next=new URL(location,current);}catch{}
+      if(![307,308].includes(response.status)||!next||next.protocol!=='https:'||next.username||next.password||next.port||next.href.includes('#')||!TRANSPORT_ORIGINS.has(next.origin)||next.pathname!==original.pathname||next.search!==original.search)throw new JobError('SITE_REDIRECT_DENIED',true);
+      if(seen.has(next.href))throw new JobError('SITE_REDIRECT_LOOP',true);
+      if(hops>=MAX_SITE_REDIRECTS)throw new JobError('SITE_REDIRECT_LIMIT',true);
+      seen.add(next.href);current=next;
+      // Only validated 307/308 hops retain the method, exact replayable audio
+      // bytes and headers. OIDC's audience remains the stable original origin.
+    }
+  }
   async function request(url,options={},retry=true){
-    if(!String(url).startsWith(ORIGIN+'/'))throw new JobError('UNSUPPORTED_SITE_ORIGIN',true);
+    let original;try{original=new URL(url);}catch{throw new JobError('UNSUPPORTED_SITE_ORIGIN',true);}
+    if(original.origin!==ORIGIN||original.username||original.password||original.port||original.href.includes('#'))throw new JobError('UNSUPPORTED_SITE_ORIGIN',true);
     for(let attempt=0;attempt<(retry?3:1);attempt++){
       let response;
-      try{response=await fetchImpl(url,{...options,redirect:'error',signal:AbortSignal.timeout(30000)});}catch{if(attempt===(retry?2:0))throw new JobError('SITE_CONNECTION_FAILED');await sleep(1000*2**attempt);continue;}
+      try{response=await followSiteRequest(original,options);}catch(error){if(error instanceof JobError&&error.fatal)throw error;if(attempt===(retry?2:0))throw new JobError('SITE_CONNECTION_FAILED');await sleep(1000*2**attempt);continue;}
       if(retry&&(response.status===429||response.status>=500)&&attempt<2){await response.body?.cancel();await sleep(1000*2**attempt);continue;}
       return response;
     }
