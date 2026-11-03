@@ -5,10 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Hourly at :07 Asia/Kolkata, including 08:07 after the editorial update.
-    - cron: '37 * * * *'
-    # An extra 08:22 Asia/Kolkata check covers a longer morning refresh.
-    - cron: '52 2 * * *'
+    # Check every 15 minutes, including 08:07 and 08:22 Asia/Kolkata.
+    # GitHub schedules are best-effort; the portal retains a labelled completed
+    # brief while the current edition is being generated.
+    - cron: '7,22,37,52 * * * *'
 
 permissions:
   contents: read
