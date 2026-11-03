@@ -180,7 +180,7 @@ const safeEvents=[];await run({client:{jobs:async()=>[job('brief')],upload:async
 const workflow=await readFile(new URL('./.github/workflows/narration.yml',import.meta.url),'utf8');
 assert.match(workflow,/id-token: write/);assert.match(workflow,/contents: read/);assert.doesNotMatch(workflow,/pull_request|upload-artifact/);assert.match(workflow,/cancel-in-progress: false/);assert.match(workflow,/timeout-minutes: 120/);
 assert.equal((workflow.match(/uses: actions\/[^@]+@[a-f0-9]{40}/g)||[]).length,3);
-assert.match(workflow,/cron: '37 \* \* \* \*'/);assert.match(workflow,/cron: '52 2 \* \* \*'/);
+assert.match(workflow,/cron: '7,22,37,52 \* \* \* \*'/);
 assert.ok(workflow.indexOf('run: node run.mjs --check')<workflow.indexOf('name: Install pinned package manager'));
 for(const name of ['Install pinned package manager','Restore public model files','Install dependencies','Check audio encoder','Generate and publish missing audio']){
   const section=workflow.slice(workflow.indexOf('- name: '+name)).split(/\n      - name:/)[0];
