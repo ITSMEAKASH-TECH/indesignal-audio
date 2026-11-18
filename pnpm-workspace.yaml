@@ -1,5 +1,7 @@
 nodeLinker: hoisted
 allowBuilds:
-  onnxruntime-node: true
+  # CPU binaries are bundled; postinstall only downloads optional Linux CUDA
+  # providers. Narration explicitly uses device: cpu, so skip GPU archives.
+  onnxruntime-node: false
   sharp: true
   protobufjs: false
